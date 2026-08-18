@@ -1,49 +1,118 @@
-#------------------------------------------------
-# STEP 1: Initialize the Model
-#------------------------------------------------
+"""
+==================================================================
+LangChain for AI Agents - Companion Code
+==================================================================
 
-from langchain.chat_models import init_chat_model
-model = init_chat_model("openai:gpt-4o-mini")
+This program demonstrates:
+- How an AI Agent uses the ReAct pattern (Reason -> Act -> Observe)
+- How to build an agent using LangChain's create_agent()
 
-#------------------------------------------------
-# STEP 2: Define Your Tools
-#------------------------------------------------
-# Each tool needs: a name, a clear docstring, and type hints. LLM reads these to decide WHEN and HOW to use each tool.
+Prerequisites:
+    pip install langchain langchain-openai langgraph python-dotenv
+
+Setup:
+    Create a .env file with:
+    OPENAI_API_KEY=sk-your-key-here
+==================================================================
+"""
+
+# ==================================================================
+# STEP 0: Load environment variables
+# ==================================================================
+# We store sensitive information like API keys in a .env file.
+# This keeps secrets out of the code (best practice).
+
+import os
+from dotenv import load_dotenv
+
+load_dotenv() # Loads varibles like OPENAI_API_KEY into environment
+
+# ==================================================================
+# STEP 1: Initialize the Model (the "brain")
+# ==================================================================
+# This is the LLM that will:
+# - Understand the question
+# - Decide which tool to use
+# - Generate the final answer
+
+# from langchain.chat_models import init_chat_model
+from langchain_nvidia_ai_endpoints import ChatNVIDIA
+
+# "gpt-5.5" is the latest model
+# model = init_chat_model("openai:gpt-5.5")
+
+# NVIDIA model
+model = ChatNVIDIA(model="nvidia/nemotron-3-ultra-550b-a55b", temperature=1)
+# openai/gpt-oss-120b - other options: messages=[{"role":"user","content":""}], temperature=1, top_p=1, max_tokens=4096, stream=False
+
+# ==================================================================
+# STEP 2: Define your tools (the "hands")
+# ==================================================================
+# Tools allow the agent to DO things instead of just responding.
+# Each tool must have:
+#   1. A clear name
+#   2. A descriptive docstring (VERY important!)
+#   3. Type hints (so the LLM knows expected inputs)
 
 from langchain_core.tools import tool
 import math
 
 @tool
 def add(a: float, b: float) -> float:
-    """Add two numbers together. Use for addition operations."""
+    """
+    Add two numbers together.
+    The agent will use this when it detects an addition problem.
+    """
     return a + b
 
 @tool
 def multiply(a: float, b: float) -> float:
-    """Multiply two numbers together. Use for multiplication operations."""
+    """
+    Multiply two numbers together.
+    Use for multiplication operations.
+    """
     return a * b
 
 @tool
-def divide(a: float, b: float) -> float:
-    """Divide the first number by the second. Returns error if dividing by zero."""
+def divide(a: float, b: float) -> str:
+    """
+    Divide the first number by the second.
+    Includes error handling for division by zero.
+    """
     if b == 0:
         return "Error: Cannot divide by zero"
-    return a / b
+    return str(a / b)
 
 @tool
-def square_root(number: float) -> float:
-    """Calculate the square root of a number."""
+def square_root(number: float) -> str:
+    """
+    Calculate the square root of a number.
+    Includes error handling for negative inputs.
+    """
     if number < 0:
         return "Error: Cannot take square root of a negative number"
-    return math.sqrt(number)
+    return str(math.sqrt(number))
 
+# Combine all tools into a list
 tools = [add, multiply, divide, square_root]
 
-#------------------------------------------------
-# STEP 3: Create the Agent
-#------------------------------------------------
-# create_agent build a full ReAct loop:
-#   Reason -> Act (call tool) -> Observe -> Repeat
+# Print available tools (helps learners see what the agent has access to)
+print("=== Available Tools ===")
+for t in tools:
+    print(f" [] {t.name}: {t.description}")
+print()
+
+# ==================================================================
+# STEP 3: Create the Agent (the "loop")
+# ==================================================================
+# create_agent automatically builds the ReAct loop:
+# 
+#   1. Reason -> LLM decides what to do
+#   2. Act -> calls a tool (if needed)
+#   3. Observe -> gets the result
+#   4. Repeat until done
+# 
+# You don't have to manually write the loop - the framework does it.
 
 from langchain.agents import create_agent
 
@@ -52,28 +121,86 @@ agent = create_agent(
     tools=tools,
 )
 
-# --------------------------------------------------
-# STEP 4: Run the Agent!
-# --------------------------------------------------
+# ==================================================================
+# STEP 4: Run the Agent
+# ==================================================================
+# This function sends a question to the agent and prints:
+#   - The final answer
+#   - (Optional) the internal execution trace
 
 def run_agent(question: str):
-    """Run the agent and print the execution trace."""
+    """Run the agent and print a clean, beginner-friendly execution trace."""
+   
     print(f"\U0001F468 User: {question}")
-    print("-" * 50)
+    print("-" * 60)
 
     result = agent.invoke({
         "messages": [("user", question)]
     })
-    print("\U0001F680 Agent:", result)
 
-# Simple: single tool call
+    print("\U0001F50E Clean Agent Execution Trace")
+    print("-" * 60)
+
+    step = 1
+
+    for msg in result["messages"]:
+
+        # 1. Human message = original user question
+        if msg.type == "human":
+            print(f"{step}. User asked:")
+            print(f"    {msg.content}")
+            step+=1
+
+        # 2. AI message with tool_calls = agent decided to use a tool
+        elif msg.type == "ai" and getattr(msg, "tool_calls", None):
+            for tool_call in msg.tool_calls:
+                tool_name = tool_call["name"]
+                tool_args = tool_call["args"]
+
+                print(f"{step}. Agent decision:")
+                print(f"    I need to use the tool: {tool_name}")
+                print(f"    Total input: {tool_args}")
+                step+=1
+
+        # 3. Tool message = result returned by tool
+        elif msg.type == "tool":
+            print(f"{step}. Tool observation:")
+            print(f"    Tool returned: {msg.content}")
+            step+=1
+
+        # 4. Final AI message = final response to user
+        elif msg.type == "ai" and msg.content:
+            print(f"{step}. Final answer:")
+            print(f"    {msg.content}")
+            step+=1
+
+    print("=" * 60)
+
+# ==================================================================
+# TEST CASES - Watch the agent in action!
+# ==================================================================
+
+# 1. Simple case -> single tool call
+# Agent should directly use "add"
 run_agent("What is 42 + 58?")
 
-# Medium: multiple tool calls in sequence
+# 2. Medium Complexity -> multiple steps
+# Agent must:
+#   multiply -> then divide
 run_agent("What is 15 multiplied by 8, then divided by 3?")
 
-# Complex: the agent must plan a multi-step approach
+# 3. Complex Reasoning -> planning required
+# Agent must:
+#   step 1: calculate area
+#   step 2: calculate square root
 run_agent(
-    "I have a rectangle with width 12 and height 7. "
-    "What is its area, and what is the square root of that area?"
+    "I have a rectangle with width 12 and height 7."
+    "What is its area, and what is the square root of the area?"
 )
+
+# 4. Edge Case - error handling
+# Agent should handle divide-by-zero gracefully
+run_agent("What is 100 divided by 0?")
+
+# Final Message
+print("✓ Agent demo complete! Next: try 03_search_agent.py")
